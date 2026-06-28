@@ -1,0 +1,9 @@
+{
+  "uuid": "aqua-dock@aedgecombe.github.io",
+  "name": "Aqua Dock",
+  "description": "A floating, macOS-style dock for GNOME Shell. Fixed or auto-hiding, with customizable transparency, icon size, spacing, corner radius and position.",
+  "shell-version": ["45", "46", "47"],
+  "version": 1,
+  "settings-schema": "org.gnome.shell.extensions.aqua-dock",
+  "url": "https://github.com/AEdgecombe/Aqua-Dock"
+}
