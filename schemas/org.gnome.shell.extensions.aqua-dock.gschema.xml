@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.aqua-dock"
+          path="/org/gnome/shell/extensions/aqua-dock/">
+
+    <key name="icon-size" type="i">
+      <default>48</default>
+      <range min="24" max="128"/>
+      <summary>Icon size</summary>
+      <description>Size of the app icons in pixels.</description>
+    </key>
+
+    <key name="dock-opacity" type="i">
+      <default>80</default>
+      <range min="0" max="100"/>
+      <summary>Background opacity</summary>
+      <description>Opacity of the dock background (0 = fully transparent, 100 = solid).</description>
+    </key>
+
+    <key name="corner-radius" type="i">
+      <default>22</default>
+      <range min="0" max="48"/>
+      <summary>Corner radius</summary>
+      <description>Rounding of the dock corners in pixels.</description>
+    </key>
+
+    <key name="dock-padding" type="i">
+      <default>8</default>
+      <range min="0" max="30"/>
+      <summary>Dock padding</summary>
+      <description>Inner padding around the icons in pixels.</description>
+    </key>
+
+    <key name="item-spacing" type="i">
+      <default>6</default>
+      <range min="0" max="30"/>
+      <summary>Icon spacing</summary>
+      <description>Gap between icons in pixels.</description>
+    </key>
+
+    <key name="edge-margin" type="i">
+      <default>8</default>
+      <range min="0" max="80"/>
+      <summary>Edge margin</summary>
+      <description>Distance between the dock and the screen edge in pixels.</description>
+    </key>
+
+    <key name="autohide" type="b">
+      <default>false</default>
+      <summary>Auto-hide</summary>
+      <description>Hide the dock and reveal it when the pointer touches the screen edge.</description>
+    </key>
+
+    <key name="position" type="s">
+      <choices>
+        <choice value="bottom"/>
+        <choice value="left"/>
+        <choice value="right"/>
+      </choices>
+      <default>"bottom"</default>
+      <summary>Position</summary>
+      <description>Screen edge the dock is anchored to.</description>
+    </key>
+
+    <key name="dark-background" type="b">
+      <default>true</default>
+      <summary>Dark background</summary>
+      <description>Use a dark translucent panel instead of a light one.</description>
+    </key>
+
+    <key name="show-running-indicators" type="b">
+      <default>true</default>
+      <summary>Running indicators</summary>
+      <description>Show a dot under apps that have open windows.</description>
+    </key>
+
+    <key name="hover-zoom" type="b">
+      <default>true</default>
+      <summary>Hover zoom</summary>
+      <description>Magnify icons on mouse hover, like macOS.</description>
+    </key>
+
+  </schema>
+</schemalist>
