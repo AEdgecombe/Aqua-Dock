@@ -1,0 +1,34 @@
+/* Aqua Dock — most sizing/colour is applied inline from settings.
+ * This file only holds the bits that don't need to be dynamic. */
+
+.aqua-dock {
+    box-shadow: 0 6px 24px 2px rgba(0, 0, 0, 0.45);
+}
+
+.aqua-dock-item {
+    border-radius: 12px;
+    padding: 2px;
+    transition-duration: 100ms;
+}
+
+.aqua-dock-item:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+}
+
+.aqua-dock-indicator {
+    width: 5px;
+    height: 5px;
+    margin-top: 3px;
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.9);
+}
+
+.aqua-dock-tooltip {
+    background-color: rgba(20, 20, 22, 0.92);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 500;
+}
