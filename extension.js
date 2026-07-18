@@ -5,6 +5,7 @@ import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const HIDE_DELAY = 350;      // ms before an unhovered dock slides away
@@ -26,6 +27,8 @@ export default class AquaDockExtension extends Extension {
         this._dock = null;
         this._edge = null;
         this._tooltip = null;
+        this._menu = null;
+        this._menuManager = null;
         this._hidden = false;
         this._hideTimeout = 0;
         this._rebuildId = 0;
@@ -75,6 +78,11 @@ export default class AquaDockExtension extends Extension {
 
     _destroyDock() {
         this._clearHideTimeout();
+        if (this._menu) {
+            this._menu.destroy();
+            this._menu = null;
+        }
+        this._menuManager = null;
         if (this._dock) {
             Main.layoutManager.removeChrome(this._dock);
             this._dock.destroy();
@@ -111,7 +119,9 @@ export default class AquaDockExtension extends Extension {
         this._dock.connect('notify::hover', () => this._onHoverChanged());
         this._dock.connect('notify::width', () => this._updatePosition());
         this._dock.connect('notify::height', () => this._updatePosition());
+        this._dock.connect('button-press-event', (a, event) => this._onButtonPress(event));
 
+        this._buildMenu();
         this._populate();
 
         Main.layoutManager.addChrome(this._dock, {
@@ -135,6 +145,47 @@ export default class AquaDockExtension extends Extension {
             this._setupAutohide();
 
         this._updatePosition();
+    }
+
+    // --- context menu -------------------------------------------------------
+
+    _buildMenu() {
+        const position = this._settings.get_string('position');
+        const side = position === 'left' ? St.Side.LEFT
+            : position === 'right' ? St.Side.RIGHT
+            : St.Side.BOTTOM;
+
+        this._menu = new PopupMenu.PopupMenu(this._dock, 0.5, side);
+        this._menu.actor.add_style_class_name('aqua-dock-menu');
+        Main.uiGroup.add_child(this._menu.actor);
+        this._menu.close();
+
+        this._menuManager = new PopupMenu.PopupMenuManager(this._dock);
+        this._menuManager.addMenu(this._menu);
+
+        const settingsItem = new PopupMenu.PopupMenuItem('Aqua Dock Settings…');
+        settingsItem.connect('activate', () => this.openPreferences());
+        this._menu.addMenuItem(settingsItem);
+
+        const hideItem = new PopupMenu.PopupSwitchMenuItem('Auto-hide',
+            this._settings.get_boolean('autohide'));
+        hideItem.connect('toggled', (item, state) => {
+            this._settings.set_boolean('autohide', state);
+        });
+        this._menu.addMenuItem(hideItem);
+    }
+
+    _onButtonPress(event) {
+        if (event.get_button() === 3) { // right-click
+            this._toggleMenu();
+            return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    _toggleMenu() {
+        if (this._menu)
+            this._menu.toggle();
     }
 
     // --- content ------------------------------------------------------------
@@ -223,6 +274,8 @@ export default class AquaDockExtension extends Extension {
             else
                 this._hideTooltip();
         });
+
+        item.connect('button-press-event', (a, event) => this._onButtonPress(event));
 
         item.connect('clicked', () => {
             this._hideTooltip();
