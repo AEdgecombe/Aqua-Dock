@@ -1,6 +1,13 @@
-# Aqua Dock
+<p align="center">
+  <img src="assets/logo.svg" alt="Aqua Dock" width="560">
+</p>
 
-A floating, macOS-style dock for **GNOME Shell** (Ubuntu 24.04 LTS, GNOME 46).
+<p align="center">
+  A floating, macOS-style dock for <b>GNOME Shell</b> — Ubuntu 24.04 LTS, GNOME 46.
+</p>
+
+---
+
 Fixed or auto-hiding, with live customisation for transparency, icon size,
 spacing, corner radius and screen position.
 
@@ -16,7 +23,8 @@ spacing, corner radius and screen position.
   the pointer touches the screen edge
 - **macOS touches** — hover magnification, running-app indicator dots, tooltips
 - **Pinned + running apps** — shows your GNOME favourites plus anything running
-- **Live customisation** via the preferences window:
+- **Live customisation** via the preferences window, with a **built-in live
+  preview** so you can see every change as you make it:
   - Icon size, icon spacing, inner padding
   - Background opacity, corner radius, dark/light panel
   - Edge margin and position
@@ -43,11 +51,19 @@ On an Xorg session you can instead reload the shell with `Alt+F2` → `r` → `E
 
 ## Configure
 
+The quickest way: **right-click anywhere on the dock** and choose
+**Aqua Dock Settings…**. The right-click menu also has a quick **Auto-hide**
+toggle.
+
+You can also open the preferences from the **Extensions** app (click the gear
+icon next to Aqua Dock), or from a terminal:
+
 ```bash
 gnome-extensions prefs aqua-dock@aedgecombe.github.io
 ```
 
-All changes apply live — no reload needed.
+The settings window shows a **live preview** of the dock, and every change
+applies to the real dock immediately — no reload needed.
 
 ## Uninstall
 

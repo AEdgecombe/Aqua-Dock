@@ -8,3 +8,7 @@ schemas/gschemas.compiled
 .vscode/
 *.swp
 *~
+
+# Local screenshots / scratch images (committed art lives in assets/)
+pictures/
+*pictures/
