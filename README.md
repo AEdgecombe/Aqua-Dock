@@ -10,7 +10,7 @@
 
 Fixed or auto-hiding, with live customisation for transparency, icon size,
 spacing, corner radius and screen position.
-
+ 
 > Built as a GNOME Shell extension rather than a standalone app on purpose:
 > on Wayland (Ubuntu 24.04's default) a normal application window cannot make
 > itself an always-on-top dock, reserve screen space, or auto-hide. Running
