@@ -26,7 +26,7 @@ spacing, corner radius and screen position.
 - **Live customisation** via the preferences window, with a **built-in live
   preview** so you can see every change as you make it:
   - Icon size, icon spacing, inner padding
-  - Background opacity, corner radius, dark/light panel
+  - Background opacity, corner radius, dark/light panel 
   - Edge margin and position
 
 ## Requirements
