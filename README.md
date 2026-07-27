@@ -15,7 +15,7 @@ spacing, corner radius and screen position.
 > on Wayland (Ubuntu 24.04's default) a normal application window cannot make
 > itself an always-on-top dock, reserve screen space, or auto-hide. Running
 > inside the shell is the only way to do this reliably — and it works on Xorg too.
-
+ 
 ## Features
 
 - **Floating panel** anchored to the bottom, left or right edge
