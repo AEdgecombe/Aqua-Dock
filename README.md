@@ -4,7 +4,7 @@
 
 <p align="center">
   A floating, macOS-style dock for <b>GNOME Shell</b> — Ubuntu 24.04 LTS, GNOME 46.
-</p>
+</p> 
 
 ---
 
