@@ -18,7 +18,7 @@ spacing, corner radius and screen position.
  
 ## Features
 
-- **Floating panel** anchored to the bottom, left or right edge
+- **Floating panel** anchored to the bottom, left or right edge 
 - **Fixed or auto-hide** — auto-hide slides the dock away and reveals it when
   the pointer touches the screen edge
 - **macOS touches** — hover magnification, running-app indicator dots, tooltips
