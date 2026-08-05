@@ -27,7 +27,7 @@ spacing, corner radius and screen position.
   preview** so you can see every change as you make it:
   - Icon size, icon spacing, inner padding
   - Background opacity, corner radius, dark/light panel 
-  - Edge margin and position
+  - Edge margin and position 
 
 ## Requirements
 
