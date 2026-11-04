@@ -194,6 +194,12 @@ export default class AquaDockExtension extends Extension {
 
     _onButtonPress(event) {
         if (event.get_button() === 3) { // right-click
+            let source = event.get_source();
+            while (source && source !== this._dock) {
+                if (this._itemApps.has(source))
+                    return Clutter.EVENT_PROPAGATE;
+                source = source.get_parent();
+            }
             this._toggleMenu();
             return Clutter.EVENT_STOP;
         }
@@ -348,7 +354,8 @@ export default class AquaDockExtension extends Extension {
         });
 
         item.connect('button-press-event', (a, event) => {
-            if (event.get_button() === 3) {
+            item._pressedButton = event.get_button();
+            if (item._pressedButton === 3) {
                 this._showAppMenu(app, item);
                 return Clutter.EVENT_STOP;
             }
@@ -356,6 +363,11 @@ export default class AquaDockExtension extends Extension {
         });
 
         item.connect('clicked', () => {
+            if (item._pressedButton !== 1) {
+                item._pressedButton = 0;
+                return;
+            }
+            item._pressedButton = 0;
             if (item._dragMoved) {
                 GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                     item._dragMoved = false;
