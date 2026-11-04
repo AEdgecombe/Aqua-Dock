@@ -23,6 +23,9 @@ spacing, corner radius and screen position.
   the pointer touches the screen edge
 - **macOS touches** — hover magnification, running-app indicator dots, tooltips
 - **Pinned + running apps** — shows your GNOME favourites plus anything running
+- **App actions** — right-click an icon to pin or remove it from the dock, open
+  a new window, or launch a private/incognito window when the app provides that action
+- **Reorderable favorites** — drag pinned icons along the dock to change their order
 - **Live customisation** via the preferences window, with a **built-in live
   preview** so you can see every change as you make it:
   - Icon size, icon spacing, inner padding
@@ -51,9 +54,11 @@ On an Xorg session you can instead reload the shell with `Alt+F2` → `r` → `E
 
 ## Configure
 
-The quickest way: **right-click anywhere on the dock** and choose
-**Aqua Dock Settings…**. The right-click menu also has a quick **Auto-hide**
-toggle.
+The quickest way: **right-click an empty area of the dock** and choose
+**Aqua Dock Settings…**. That menu also has a quick **Auto-hide** toggle.
+Right-click an app icon for app-specific actions, including pinning and any
+private/incognito window action provided by that app. Drag pinned icons to
+reorder them.
 
 You can also open the preferences from the **Extensions** app (click the gear
 icon next to Aqua Dock), or from a terminal:

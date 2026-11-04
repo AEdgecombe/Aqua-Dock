@@ -28,7 +28,10 @@ export default class AquaDockExtension extends Extension {
         this._edge = null;
         this._tooltip = null;
         this._menu = null;
+        this._appMenu = null;
         this._menuManager = null;
+        this._itemApps = new Map();
+        this._favoriteIds = new Set();
         this._hidden = false;
         this._hideTimeout = 0;
         this._rebuildId = 0;
@@ -78,11 +81,19 @@ export default class AquaDockExtension extends Extension {
 
     _destroyDock() {
         this._clearHideTimeout();
+        if (this._appMenu) {
+            if (this._menuManager)
+                this._menuManager.removeMenu(this._appMenu);
+            this._appMenu.destroy();
+            this._appMenu = null;
+        }
         if (this._menu) {
             this._menu.destroy();
             this._menu = null;
         }
         this._menuManager = null;
+        this._itemApps.clear();
+        this._favoriteIds.clear();
         if (this._dock) {
             Main.layoutManager.removeChrome(this._dock);
             this._dock.destroy();
@@ -183,6 +194,57 @@ export default class AquaDockExtension extends Extension {
         return Clutter.EVENT_PROPAGATE;
     }
 
+    _showAppMenu(app, item) {
+        if (this._appMenu) {
+            this._menuManager.removeMenu(this._appMenu);
+            this._appMenu.destroy();
+        }
+
+        const position = this._settings.get_string('position');
+        const side = position === 'left' ? St.Side.LEFT
+            : position === 'right' ? St.Side.RIGHT
+            : St.Side.BOTTOM;
+        const menu = new PopupMenu.PopupMenu(item, 0.5, side);
+        menu.actor.add_style_class_name('aqua-dock-menu');
+        Main.uiGroup.add_child(menu.actor);
+        this._menuManager.addMenu(menu);
+        this._appMenu = menu;
+
+        const favorites = AppFavorites.getAppFavorites();
+        const isFavorite = favorites.getFavorites().some(favorite =>
+            favorite.get_id() === app.get_id());
+
+        const newWindowItem = new PopupMenu.PopupMenuItem('New Window');
+        newWindowItem.connect('activate', () => app.open_new_window(-1));
+        menu.addMenuItem(newWindowItem);
+
+        const appInfo = app.get_app_info();
+        if (appInfo) {
+            for (const action of appInfo.list_actions()) {
+                const label = appInfo.get_action_name(action) || '';
+                if (!/private|incognito/i.test(`${action} ${label}`))
+                    continue;
+
+                const privateWindowItem = new PopupMenu.PopupMenuItem(label || 'Open Private Window');
+                privateWindowItem.connect('activate', () =>
+                    app.launch_action(action, global.get_current_time()));
+                menu.addMenuItem(privateWindowItem);
+            }
+        }
+
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        const favoriteItem = new PopupMenu.PopupMenuItem(
+            isFavorite ? 'Remove from Dock' : 'Pin to Dock');
+        favoriteItem.connect('activate', () => {
+            if (isFavorite)
+                favorites.removeFavorite(app.get_id());
+            else
+                favorites.addFavorite(app.get_id());
+        });
+        menu.addMenuItem(favoriteItem);
+        menu.open();
+    }
+
     _toggleMenu() {
         if (this._menu)
             this._menu.toggle();
@@ -195,7 +257,10 @@ export default class AquaDockExtension extends Extension {
         const apps = [];
         const seen = new Set();
 
-        for (const app of AppFavorites.getAppFavorites().getFavorites()) {
+        const favorites = AppFavorites.getAppFavorites().getFavorites();
+        this._favoriteIds = new Set(favorites.filter(app => app).map(app => app.get_id()));
+
+        for (const app of favorites) {
             if (app && !seen.has(app.get_id())) {
                 seen.add(app.get_id());
                 apps.push(app);
@@ -222,6 +287,7 @@ export default class AquaDockExtension extends Extension {
             const item = this._createItem(app, iconSize, showIndicators, hoverZoom, position);
             item.set_style(`margin: ${position === 'bottom' ? `0 ${spacing / 2}px` : `${spacing / 2}px 0`};`);
             this._dock.add_child(item);
+            this._itemApps.set(item, app);
         }
     }
 
@@ -275,16 +341,84 @@ export default class AquaDockExtension extends Extension {
                 this._hideTooltip();
         });
 
-        item.connect('button-press-event', (a, event) => this._onButtonPress(event));
+        item.connect('button-press-event', (a, event) => {
+            if (event.get_button() === 3) {
+                this._showAppMenu(app, item);
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
 
         item.connect('clicked', () => {
+            if (item._dragMoved) {
+                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    item._dragMoved = false;
+                    return GLib.SOURCE_REMOVE;
+                });
+                return;
+            }
             this._hideTooltip();
             this._activate(app);
         });
 
         item.connect('destroy', () => this._hideTooltip());
 
+        if (this._favoriteIds.has(app.get_id())) {
+            const dragAction = new Clutter.DragAction();
+            item.add_action(dragAction);
+            dragAction.connect('drag-begin', () => {
+                item._dragMoved = false;
+            });
+            dragAction.connect('drag-motion', () => this._onItemDragMotion(item));
+            dragAction.connect('drag-end', () => this._onItemDragEnd(item));
+        }
+
         return item;
+    }
+
+    _onItemDragMotion(item) {
+        if (!this._dock || !this._favoriteIds.has(this._itemApps.get(item)?.get_id()))
+            return;
+
+        const [pointerX, pointerY] = global.get_pointer();
+        const horizontal = this._settings.get_string('position') === 'bottom';
+        const pointer = horizontal ? pointerX : pointerY;
+        const favoriteItems = this._dock.get_children().filter(child =>
+            this._favoriteIds.has(this._itemApps.get(child)?.get_id()));
+        const targetIndex = favoriteItems
+            .filter(child => child !== item)
+            .filter(child => {
+                const [x, y] = child.get_transformed_position();
+                const [width, height] = child.get_transformed_size();
+                const center = horizontal ? x + width / 2 : y + height / 2;
+                return center < pointer;
+            }).length;
+        const currentIndex = favoriteItems.indexOf(item);
+        const newIndex = targetIndex;
+
+        if (newIndex === currentIndex)
+            return;
+
+        this._dock.remove_child(item);
+        this._dock.insert_child_at_index(item, newIndex);
+        item._dragMoved = true;
+    }
+
+    _onItemDragEnd(item) {
+        if (!item._dragMoved)
+            return;
+
+        const app = this._itemApps.get(item);
+        const index = this._dock.get_children()
+            .filter(child => this._favoriteIds.has(this._itemApps.get(child)?.get_id()))
+            .indexOf(item);
+        if (app && index >= 0)
+            AppFavorites.getAppFavorites().moveFavoriteToPos(app.get_id(), index);
+
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            item._dragMoved = false;
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _activate(app) {
