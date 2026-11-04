@@ -5,6 +5,7 @@ import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
+import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -32,6 +33,7 @@ export default class AquaDockExtension extends Extension {
         this._menuManager = null;
         this._itemApps = new Map();
         this._favoriteIds = new Set();
+        this._dragMonitor = null;
         this._hidden = false;
         this._hideTimeout = 0;
         this._rebuildId = 0;
@@ -81,6 +83,10 @@ export default class AquaDockExtension extends Extension {
 
     _destroyDock() {
         this._clearHideTimeout();
+        if (this._dragMonitor) {
+            DND.removeDragMonitor(this._dragMonitor);
+            this._dragMonitor = null;
+        }
         if (this._appMenu) {
             if (this._menuManager)
                 this._menuManager.removeMenu(this._appMenu);
@@ -364,23 +370,33 @@ export default class AquaDockExtension extends Extension {
         item.connect('destroy', () => this._hideTooltip());
 
         if (this._favoriteIds.has(app.get_id())) {
-            const dragAction = new Clutter.DragAction();
-            item.add_action(dragAction);
-            dragAction.connect('drag-begin', () => {
+            const draggable = DND.makeDraggable(item);
+            draggable.connect('drag-begin', () => {
                 item._dragMoved = false;
+                this._dragMonitor = {
+                    dragMotion: event => {
+                        this._onItemDragMotion(item, event.x, event.y);
+                        return DND.DragMotionResult.CONTINUE;
+                    },
+                };
+                DND.addDragMonitor(this._dragMonitor);
             });
-            dragAction.connect('drag-motion', () => this._onItemDragMotion(item));
-            dragAction.connect('drag-end', () => this._onItemDragEnd(item));
+            draggable.connect('drag-end', () => {
+                if (this._dragMonitor) {
+                    DND.removeDragMonitor(this._dragMonitor);
+                    this._dragMonitor = null;
+                }
+                this._onItemDragEnd(item);
+            });
         }
 
         return item;
     }
 
-    _onItemDragMotion(item) {
+    _onItemDragMotion(item, pointerX, pointerY) {
         if (!this._dock || !this._favoriteIds.has(this._itemApps.get(item)?.get_id()))
             return;
 
-        const [pointerX, pointerY] = global.get_pointer();
         const horizontal = this._settings.get_string('position') === 'bottom';
         const pointer = horizontal ? pointerX : pointerY;
         const favoriteItems = this._dock.get_children().filter(child =>
