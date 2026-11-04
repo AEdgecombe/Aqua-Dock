@@ -29,7 +29,6 @@ export default class AquaDockExtension extends Extension {
         this._edge = null;
         this._tooltip = null;
         this._menu = null;
-        this._appMenu = null;
         this._menuManager = null;
         this._itemApps = new Map();
         this._favoriteIds = new Set();
@@ -86,12 +85,6 @@ export default class AquaDockExtension extends Extension {
         if (this._dragMonitor) {
             DND.removeDragMonitor(this._dragMonitor);
             this._dragMonitor = null;
-        }
-        if (this._appMenu) {
-            if (this._menuManager)
-                this._menuManager.removeMenu(this._appMenu);
-            this._appMenu.destroy();
-            this._appMenu = null;
         }
         if (this._menu) {
             this._menu.destroy();
@@ -180,16 +173,7 @@ export default class AquaDockExtension extends Extension {
         this._menuManager = new PopupMenu.PopupMenuManager(this._dock);
         this._menuManager.addMenu(this._menu);
 
-        const settingsItem = new PopupMenu.PopupMenuItem('Aqua Dock Settings…');
-        settingsItem.connect('activate', () => this.openPreferences());
-        this._menu.addMenuItem(settingsItem);
-
-        const hideItem = new PopupMenu.PopupSwitchMenuItem('Auto-hide',
-            this._settings.get_boolean('autohide'));
-        hideItem.connect('toggled', (item, state) => {
-            this._settings.set_boolean('autohide', state);
-        });
-        this._menu.addMenuItem(hideItem);
+        this._populateMenu();
     }
 
     _onButtonPress(event) {
@@ -200,61 +184,62 @@ export default class AquaDockExtension extends Extension {
                     return Clutter.EVENT_PROPAGATE;
                 source = source.get_parent();
             }
+            this._populateMenu();
             this._toggleMenu();
             return Clutter.EVENT_STOP;
         }
         return Clutter.EVENT_PROPAGATE;
     }
 
-    _showAppMenu(app, item) {
-        if (this._appMenu) {
-            this._menuManager.removeMenu(this._appMenu);
-            this._appMenu.destroy();
-        }
+    _populateMenu(app = null) {
+        this._menu.removeAll();
 
-        const position = this._settings.get_string('position');
-        const side = position === 'left' ? St.Side.LEFT
-            : position === 'right' ? St.Side.RIGHT
-            : St.Side.BOTTOM;
-        const menu = new PopupMenu.PopupMenu(item, 0.5, side);
-        menu.actor.add_style_class_name('aqua-dock-menu');
-        Main.uiGroup.add_child(menu.actor);
-        this._menuManager.addMenu(menu);
-        this._appMenu = menu;
+        if (app) {
+            const favorites = AppFavorites.getAppFavorites();
+            const isFavorite = favorites.getFavorites().some(favorite =>
+                favorite.get_id() === app.get_id());
 
-        const favorites = AppFavorites.getAppFavorites();
-        const isFavorite = favorites.getFavorites().some(favorite =>
-            favorite.get_id() === app.get_id());
+            const newWindowItem = new PopupMenu.PopupMenuItem('New Window');
+            newWindowItem.connect('activate', () => app.open_new_window(-1));
+            this._menu.addMenuItem(newWindowItem);
 
-        const newWindowItem = new PopupMenu.PopupMenuItem('New Window');
-        newWindowItem.connect('activate', () => app.open_new_window(-1));
-        menu.addMenuItem(newWindowItem);
+            const appInfo = app.get_app_info();
+            if (appInfo) {
+                for (const action of appInfo.list_actions()) {
+                    const label = appInfo.get_action_name(action) || '';
+                    if (!/private|incognito/i.test(`${action} ${label}`))
+                        continue;
 
-        const appInfo = app.get_app_info();
-        if (appInfo) {
-            for (const action of appInfo.list_actions()) {
-                const label = appInfo.get_action_name(action) || '';
-                if (!/private|incognito/i.test(`${action} ${label}`))
-                    continue;
-
-                const privateWindowItem = new PopupMenu.PopupMenuItem(label || 'Open Private Window');
-                privateWindowItem.connect('activate', () =>
-                    app.launch_action(action, global.get_current_time()));
-                menu.addMenuItem(privateWindowItem);
+                    const privateWindowItem = new PopupMenu.PopupMenuItem(label || 'Open Private Window');
+                    privateWindowItem.connect('activate', () =>
+                        app.launch_action(action, global.get_current_time()));
+                    this._menu.addMenuItem(privateWindowItem);
+                }
             }
+
+            this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            const favoriteItem = new PopupMenu.PopupMenuItem(
+                isFavorite ? 'Remove from Dock' : 'Pin to Dock');
+            favoriteItem.connect('activate', () => {
+                if (isFavorite)
+                    favorites.removeFavorite(app.get_id());
+                else
+                    favorites.addFavorite(app.get_id());
+            });
+            this._menu.addMenuItem(favoriteItem);
+            this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         }
 
-        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        const favoriteItem = new PopupMenu.PopupMenuItem(
-            isFavorite ? 'Remove from Dock' : 'Pin to Dock');
-        favoriteItem.connect('activate', () => {
-            if (isFavorite)
-                favorites.removeFavorite(app.get_id());
-            else
-                favorites.addFavorite(app.get_id());
+        const settingsItem = new PopupMenu.PopupMenuItem('Aqua Dock Settings…');
+        settingsItem.connect('activate', () => this.openPreferences());
+        this._menu.addMenuItem(settingsItem);
+
+        const hideItem = new PopupMenu.PopupSwitchMenuItem('Auto-hide',
+            this._settings.get_boolean('autohide'));
+        hideItem.connect('toggled', (item, state) => {
+            this._settings.set_boolean('autohide', state);
         });
-        menu.addMenuItem(favoriteItem);
-        menu.open();
+        this._menu.addMenuItem(hideItem);
     }
 
     _toggleMenu() {
@@ -356,18 +341,20 @@ export default class AquaDockExtension extends Extension {
         item.connect('button-press-event', (a, event) => {
             item._pressedButton = event.get_button();
             if (item._pressedButton === 3) {
-                this._showAppMenu(app, item);
+                this._populateMenu(app);
+                this._menu.open();
                 return Clutter.EVENT_STOP;
             }
             return Clutter.EVENT_PROPAGATE;
         });
 
         item.connect('clicked', () => {
-            if (item._pressedButton !== 1) {
-                item._pressedButton = 0;
+            if (item._pressedButton !== undefined && item._pressedButton !== null &&
+                item._pressedButton !== 1) {
+                item._pressedButton = null;
                 return;
             }
-            item._pressedButton = 0;
+            item._pressedButton = null;
             if (item._dragMoved) {
                 GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                     item._dragMoved = false;
