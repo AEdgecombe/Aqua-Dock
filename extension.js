@@ -173,6 +173,12 @@ export default class AquaDockExtension extends Extension {
         this._menuManager = new PopupMenu.PopupMenuManager(this._dock);
         this._menuManager.addMenu(this._menu);
 
+        // Re-run the auto-hide check once the menu closes.
+        this._menu.connect('open-state-changed', (menu, open) => {
+            if (!open && this._dock)
+                this._onHoverChanged();
+        });
+
         this._populateMenu();
     }
 
@@ -200,7 +206,13 @@ export default class AquaDockExtension extends Extension {
                 favorite.get_id() === app.get_id());
 
             const newWindowItem = new PopupMenu.PopupMenuItem('New Window');
-            newWindowItem.connect('activate', () => app.open_new_window(-1));
+            newWindowItem.connect('activate', () => {
+                try {
+                    app.open_new_window(-1);
+                } catch (e) {
+                    logError(e, 'Aqua Dock: failed to open new window');
+                }
+            });
             this._menu.addMenuItem(newWindowItem);
 
             const appInfo = app.get_app_info();
@@ -211,8 +223,15 @@ export default class AquaDockExtension extends Extension {
                         continue;
 
                     const privateWindowItem = new PopupMenu.PopupMenuItem(label || 'Open Private Window');
-                    privateWindowItem.connect('activate', () =>
-                        app.launch_action(action, global.get_current_time()));
+                    privateWindowItem.connect('activate', () => {
+                        // Shell.App.launch_action needs (name, timestamp, workspace);
+                        // omitting the workspace throws and nothing launches.
+                        try {
+                            app.launch_action(action, global.get_current_time(), -1);
+                        } catch (e) {
+                            logError(e, `Aqua Dock: failed to launch action "${action}"`);
+                        }
+                    });
                     this._menu.addMenuItem(privateWindowItem);
                 }
             }
@@ -634,6 +653,9 @@ export default class AquaDockExtension extends Extension {
             this._clearHideTimeout();
             this._hideTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HIDE_DELAY, () => {
                 this._hideTimeout = 0;
+                // Don't slide the dock away while its context menu is open.
+                if (this._menu && this._menu.isOpen)
+                    return GLib.SOURCE_REMOVE;
                 if (this._dock && !this._dock.hover && !(this._edge && this._edge.hover))
                     this._hide();
                 return GLib.SOURCE_REMOVE;
