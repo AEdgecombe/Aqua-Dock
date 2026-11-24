@@ -199,6 +199,7 @@ export default class AquaDockPreferences extends ExtensionPreferences {
         const dark = settings.get_boolean('dark-background');
         const rgb = dark ? '30, 30, 32' : '245, 245, 247';
         const border = dark ? '255, 255, 255' : '0, 0, 0';
+        const dotColour = dark ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.7)';
 
         this._css.load_from_data(`
             .aqua-preview-stage {
@@ -214,7 +215,7 @@ export default class AquaDockPreferences extends ExtensionPreferences {
                 box-shadow: 0 6px 24px 2px rgba(0, 0, 0, 0.45);
             }
             .aqua-preview-dot {
-                background-color: rgba(255, 255, 255, 0.9);
+                background-color: ${dotColour};
                 border-radius: 3px;
                 min-width: 5px;
                 min-height: 5px;

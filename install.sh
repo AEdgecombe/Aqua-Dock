@@ -9,12 +9,13 @@ DEST="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
 echo "Installing ${UUID}..."
 
 rm -rf "${DEST}"
-mkdir -p "${DEST}/schemas"
+mkdir -p "${DEST}/schemas" "${DEST}/lib"
 
 cp "${SRC}/metadata.json"  "${DEST}/"
 cp "${SRC}/extension.js"   "${DEST}/"
 cp "${SRC}/prefs.js"       "${DEST}/"
 cp "${SRC}/stylesheet.css" "${DEST}/"
+cp "${SRC}/lib/"*.js        "${DEST}/lib/"
 cp "${SRC}/schemas/"*.gschema.xml "${DEST}/schemas/"
 
 echo "Compiling settings schema..."
