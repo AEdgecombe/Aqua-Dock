@@ -12,6 +12,7 @@ import {AppMenu} from 'resource:///org/gnome/shell/ui/appMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import * as Layout from './lib/layout.js';
+import {PRESETS, applyPreset, findMatchingPreset} from './lib/presets.js';
 
 const HIDE_DELAY = 350;      // ms before an unhovered dock slides away
 const REVEAL_MS = 200;       // slide-in duration
@@ -23,7 +24,7 @@ const DRAG_PLACEHOLDER_OPACITY = 90;
 
 // Settings that change the dock's chrome (struts, orientation, menu side,
 // reveal strip). Any other key only needs the icons and style refreshed.
-const STRUCTURAL_KEYS = new Set(['position', 'autohide']);
+const STRUCTURAL_KEYS = new Set(['position', 'autohide', 'panel-mode']);
 
 const POSITION_LABELS = {bottom: 'Bottom', left: 'Left', right: 'Right'};
 
@@ -364,6 +365,7 @@ export default class AquaDockExtension extends Extension {
         };
         addSwitch('Auto-hide', 'autohide');
         addSwitch('Magnification', 'hover-zoom');
+        addSwitch('Panel Mode', 'panel-mode');
 
         const group = title => {
             if (nested) {
@@ -390,6 +392,16 @@ export default class AquaDockExtension extends Extension {
             addChoice(positions, POSITION_LABELS[pos], pos === current,
                 () => s.set_string('position', pos));
         }
+
+        const styles = group('Style');
+        const active = findMatchingPreset(s);
+        for (const preset of PRESETS) {
+            // A throwaway Gio.Settings: applyPreset() puts it in delay mode.
+            addChoice(styles, preset.name, preset === active,
+                () => applyPreset(this.getSettings(), preset.id));
+        }
+        if (!active)
+            addChoice(styles, 'Custom', true, null);
 
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         const prefs = new PopupMenu.PopupMenuItem('Dock Settings…');
@@ -663,6 +675,11 @@ export default class AquaDockExtension extends Extension {
         const rgb = dark ? '30, 30, 32' : '245, 245, 247';
         const border = dark ? '255, 255, 255' : '0, 0, 0';
 
+        // Fade the outline and shadow with the panel, so a fully
+        // transparent dock really is just icons.
+        const borderAlpha = Math.min(0.12, alpha * 0.2).toFixed(3);
+        const shadowAlpha = (0.45 * alpha).toFixed(3);
+
         if (dark)
             this._dock.remove_style_class_name('aqua-dock-light');
         else
@@ -672,7 +689,8 @@ export default class AquaDockExtension extends Extension {
             `background-color: rgba(${rgb}, ${alpha});` +
             `border-radius: ${radius}px;` +
             `padding: ${padding}px;` +
-            `border: 1px solid rgba(${border}, 0.12);`
+            `border: 1px solid rgba(${border}, ${borderAlpha});` +
+            `box-shadow: 0 6px 24px 2px rgba(0, 0, 0, ${shadowAlpha});`
         );
     }
 
@@ -684,14 +702,25 @@ export default class AquaDockExtension extends Extension {
         if (!monitor)
             return;
 
+        const panelMode = this._settings.get_boolean('panel-mode');
+        const panelBox = Main.layoutManager.panelBox;
         const rect = Layout.dockRect({
             position: this.position,
+            panelMode,
             margin: this._settings.get_int('edge-margin'),
             monitor,
             width: this._dock.width,
             height: this._dock.height,
+            topInset: panelBox.visible ? panelBox.height : 0,
         });
+
         this._dock.set_position(rect.x, rect.y);
+        if (panelMode) {
+            if (Layout.isHorizontal(this.position))
+                this._dock.set_width(rect.width);
+            else
+                this._dock.set_height(rect.height);
+        }
 
         // Keep a hidden dock parked off-screen after any size change.
         if (this._hidden)

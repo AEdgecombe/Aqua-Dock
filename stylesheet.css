@@ -1,9 +1,6 @@
-/* Aqua Dock — most sizing/colour is applied inline from settings.
+/* Aqua Dock — most sizing/colour (including the shadow, which fades with
+ * the panel opacity) is applied inline from settings.
  * This file only holds the bits that don't need to be dynamic. */
-
-.aqua-dock {
-    box-shadow: 0 6px 24px 2px rgba(0, 0, 0, 0.45);
-}
 
 .aqua-dock-item {
     border-radius: 12px;

@@ -18,7 +18,10 @@ spacing, corner radius and screen position.
  
 ## Features
 
-- **Floating panel** anchored to the bottom, left or right edge 
+- **Floating panel** anchored to the bottom, left or right edge, or
+  **panel mode** that stretches along the whole edge like a taskbar
+- **Style presets** — one click to look like macOS (light or dark),
+  Windows 11, Ubuntu, ChromeOS, a minimal icons-only dock, or the Aqua default
 - **Fixed or auto-hide** — auto-hide slides the dock away and reveals it when
   the pointer touches the screen edge
 - **macOS touches** — hover magnification, running-app indicator dots, tooltips
@@ -58,8 +61,9 @@ On an Xorg session you can instead reload the shell with `Alt+F2` → `r` → `E
 ## Configure
 
 The quickest way: **right-click an empty area of the dock**. That menu has
-toggles for **Auto-hide** and **Magnification**, a **Position on Screen**
-submenu, and **Dock Settings…**.
+toggles for **Auto-hide**, **Magnification** and **Panel Mode**, a
+**Position on Screen** submenu, a **Style** submenu with the presets, and
+**Dock Settings…**.
 
 Right-click an app icon for its own menu (windows, actions, Pin/Unpin,
 Move Left/Right, Quit); the same dock options are in its **Dock** submenu.
@@ -72,8 +76,9 @@ icon next to Aqua Dock), or from a terminal:
 gnome-extensions prefs aqua-dock@aedgecombe.github.io
 ```
 
-The settings window shows a **live preview** of the dock, and every change
-applies to the real dock immediately — no reload needed.
+The settings window opens on a **Presets** page and shows a **live preview**
+of the dock; every change applies to the real dock immediately — no reload
+needed. Picking a preset and then tweaking a value turns it into *Custom*.
 
 ## Uninstall
 
@@ -87,8 +92,8 @@ rm -rf ~/.local/share/gnome-shell/extensions/aqua-dock@aedgecombe.github.io
 - `extension.js` — the dock: builds the panel, handles placement, auto-hide,
   hover zoom, tooltips and app activation.
 - `prefs.js` — libadwaita preferences window bound to GSettings.
-- `lib/layout.js` — pure placement maths with no GNOME imports, so it can
-  be unit tested.
+- `lib/layout.js`, `lib/presets.js` — pure logic (placement maths, presets)
+  shared by both, with no GNOME imports so it can be unit tested.
 - `schemas/` — the GSettings schema (compiled by `install.sh`).
 - Checks (Node 18+): `npm ci` once, then `npm run check` runs ESLint, a
   strict schema compile and the unit tests in `tests/`.

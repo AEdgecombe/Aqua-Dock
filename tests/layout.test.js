@@ -21,15 +21,33 @@ test('only the bottom dock is horizontal', () => {
 });
 
 test('floating bottom dock is centred above the margin', () => {
-    const r = dockRect({position: 'bottom', margin: 8, monitor, width: 400, height: 64});
+    const r = dockRect({position: 'bottom', panelMode: false, margin: 8, monitor, width: 400, height: 64});
     assert.deepEqual(r, {x: 100 + 760, y: 1080 - 64 - 8, width: 400, height: 64});
 });
 
 test('floating left and right docks are vertically centred', () => {
-    const left = dockRect({position: 'left', margin: 8, monitor, width: 64, height: 400});
+    const left = dockRect({position: 'left', panelMode: false, margin: 8, monitor, width: 64, height: 400});
     assert.deepEqual(left, {x: 108, y: 340, width: 64, height: 400});
-    const right = dockRect({position: 'right', margin: 8, monitor, width: 64, height: 400});
+    const right = dockRect({position: 'right', panelMode: false, margin: 8, monitor, width: 64, height: 400});
     assert.deepEqual(right, {x: 100 + 1920 - 64 - 8, y: 340, width: 64, height: 400});
+});
+
+test('bottom panel mode spans the full monitor width', () => {
+    const r = dockRect({position: 'bottom', panelMode: true, margin: 0, monitor, width: 400, height: 48});
+    assert.deepEqual(r, {x: 100, y: 1032, width: 1920, height: 48});
+});
+
+test('vertical panel mode spans the height below the top bar', () => {
+    const r = dockRect({
+        position: 'left', panelMode: true, margin: 0, monitor, width: 60, height: 400, topInset: 32,
+    });
+    assert.deepEqual(r, {x: 100, y: 32, width: 60, height: 1048});
+});
+
+test('top inset is ignored by floating docks', () => {
+    const a = dockRect({position: 'left', panelMode: false, margin: 0, monitor, width: 60, height: 400, topInset: 32});
+    const b = dockRect({position: 'left', panelMode: false, margin: 0, monitor, width: 60, height: 400});
+    assert.deepEqual(a, b);
 });
 
 test('hidden offset pushes the dock past its edge', () => {
