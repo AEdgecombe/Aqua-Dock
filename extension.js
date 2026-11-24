@@ -5,80 +5,195 @@ import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
+import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import {AppMenu} from 'resource:///org/gnome/shell/ui/appMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+
+import * as Layout from './lib/layout.js';
 
 const HIDE_DELAY = 350;      // ms before an unhovered dock slides away
 const REVEAL_MS = 200;       // slide-in duration
 const HIDE_MS = 250;         // slide-out duration
 const ZOOM_MS = 140;         // hover magnify duration
 const ZOOM_SCALE = 1.35;
+const EDGE_THICKNESS = 3;    // px strip that reveals a hidden dock
+const DRAG_PLACEHOLDER_OPACITY = 90;
+
+// Settings that change the dock's chrome (struts, orientation, menu side,
+// reveal strip). Any other key only needs the icons and style refreshed.
+const STRUCTURAL_KEYS = new Set(['position', 'autohide']);
+
+const POSITION_LABELS = {bottom: 'Bottom', left: 'Left', right: 'Right'};
+
+// NO_DOT (keeps unselected choices aligned) only exists from GNOME 46.
+const UNSELECTED = PopupMenu.Ornament.NO_DOT ?? PopupMenu.Ornament.NONE;
+
+function menuSide(position) {
+    if (position === 'left')
+        return St.Side.LEFT;
+    if (position === 'right')
+        return St.Side.RIGHT;
+    return St.Side.BOTTOM;
+}
+
+/**
+ * GNOME's own app menu (open windows, New Window, desktop actions, GPU
+ * launch, App Details, Quit) plus dock-specific items: pinning wording,
+ * moving a pinned app, and the dock options.
+ */
+class DockAppMenu extends AppMenu {
+    constructor(sourceActor, dock) {
+        super(sourceActor, menuSide(dock.position), {
+            favoritesSection: true,
+            showSingleWindows: true,
+        });
+        this._dock = dock;
+        this.actor.add_style_class_name('aqua-dock-menu');
+
+        // "Move Left/Right" sits directly under Pin/Unpin.
+        this._moveSection = new PopupMenu.PopupMenuSection();
+        const pinIndex = this._getMenuItems().indexOf(this._toggleFavoriteItem);
+        this.addMenuItem(this._moveSection, pinIndex + 1);
+
+        this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._dockItem = new PopupMenu.PopupSubMenuMenuItem('Dock');
+        this.addMenuItem(this._dockItem);
+    }
+
+    _updateFavoriteItem() {
+        super._updateFavoriteItem();
+        if (this._app && this._toggleFavoriteItem.visible) {
+            this._toggleFavoriteItem.label.text =
+                this._appFavorites.isFavorite(this._app.get_id())
+                    ? 'Unpin from Dock'
+                    : 'Pin to Dock';
+        }
+    }
+
+    /** Refresh the items whose state can change between openings. */
+    prepare() {
+        this._moveSection.removeAll();
+        if (this._app && this._appFavorites.isFavorite(this._app.get_id())) {
+            const id = this._app.get_id();
+            const ids = this._appFavorites.getFavorites().map(app => app.get_id());
+            const labels = Layout.moveLabels(this._dock.position);
+            for (const [label, delta] of [[labels.back, -1], [labels.forward, 1]]) {
+                const target = Layout.shiftedIndex(ids, id, delta);
+                if (target >= 0) {
+                    this._moveSection.addAction(label,
+                        () => this._appFavorites.moveFavoriteToPos(id, target));
+                }
+            }
+        }
+
+        this._dockItem.menu.removeAll();
+        this._dock.fillDockOptions(this._dockItem.menu, false);
+    }
+}
 
 export default class AquaDockExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
 
-        // External signals we own and must disconnect on disable().
-        this._settingsChangedId = this._settings.connect('changed', () => this._queueRebuild());
-        this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._updatePosition());
-        this._favoritesId = AppFavorites.getAppFavorites().connect('changed', () => this._queueRebuild());
-        this._appStateId = Shell.AppSystem.get_default().connect('app-state-changed', () => this._queueRebuild());
-
-        this._dock = null;
+        this._dock = null;          // St.Bin: the visible panel
+        this._box = null;           // St.BoxLayout of app items inside it
         this._edge = null;
         this._tooltip = null;
-        this._menu = null;
+        this._dockMenu = null;
         this._menuManager = null;
+        this._openMenus = new Set();
         this._itemApps = new Map();
         this._favoriteIds = new Set();
         this._dragMonitor = null;
+        this._dragging = false;
         this._hidden = false;
         this._hideTimeout = 0;
-        this._rebuildId = 0;
+        this._updateId = 0;
+        this._pendingFull = false;
+        this._pendingItems = false;
 
-        this._buildDock();
+        this._settings.connectObject('changed',
+            (_s, key) => this._queueUpdate(STRUCTURAL_KEYS.has(key)), this);
+        Main.layoutManager.connectObject('monitors-changed',
+            () => this._queueUpdate(true), this);
+        AppFavorites.getAppFavorites().connectObject('changed',
+            () => this._queueUpdate(false), this);
+        Shell.AppSystem.get_default().connectObject('app-state-changed',
+            () => this._queueUpdate(false), this);
+
+        this._buildDock(false);
     }
 
     disable() {
-        this._clearHideTimeout();
-
-        if (this._rebuildId) {
-            GLib.source_remove(this._rebuildId);
-            this._rebuildId = 0;
+        if (this._updateId) {
+            GLib.source_remove(this._updateId);
+            this._updateId = 0;
         }
-        if (this._settingsChangedId) {
-            this._settings.disconnect(this._settingsChangedId);
-            this._settingsChangedId = 0;
-        }
-        if (this._monitorsId) {
-            Main.layoutManager.disconnect(this._monitorsId);
-            this._monitorsId = 0;
-        }
-        if (this._favoritesId) {
-            AppFavorites.getAppFavorites().disconnect(this._favoritesId);
-            this._favoritesId = 0;
-        }
-        if (this._appStateId) {
-            Shell.AppSystem.get_default().disconnect(this._appStateId);
-            this._appStateId = 0;
-        }
+        this._settings.disconnectObject(this);
+        Main.layoutManager.disconnectObject(this);
+        AppFavorites.getAppFavorites().disconnectObject(this);
+        Shell.AppSystem.get_default().disconnectObject(this);
 
         this._destroyDock();
         this._settings = null;
     }
 
-    // --- rebuild plumbing ---------------------------------------------------
+    get position() {
+        return this._settings.get_string('position');
+    }
 
-    _queueRebuild() {
-        if (this._rebuildId)
+    // --- update plumbing ----------------------------------------------------
+
+    /**
+     * Coalesce changes into one idle update. `full` rebuilds the chrome;
+     * otherwise only the icons and style are refreshed.
+     */
+    _queueUpdate(full) {
+        this._pendingFull ||= full;
+        this._pendingItems = true;
+        if (this._updateId)
             return;
-        this._rebuildId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            this._rebuildId = 0;
-            this._buildDock();
+        this._updateId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._updateId = 0;
+            this._flushUpdates();
             return GLib.SOURCE_REMOVE;
         });
     }
+
+    _flushUpdates() {
+        // Never pull the dock, or the icon a menu points at, out from under
+        // an open menu or an in-flight drag. _afterInteraction() comes back
+        // here once they finish.
+        if (this._openMenus.size > 0 || this._dragging)
+            return;
+        if (!this._pendingFull && !this._pendingItems)
+            return;
+
+        const full = this._pendingFull;
+        this._pendingFull = false;
+        this._pendingItems = false;
+
+        if (full || !this._dock) {
+            this._buildDock(true);
+        } else {
+            this._applyStyle();
+            this._refreshItems();
+            this._updatePosition();
+        }
+    }
+
+    /** Called when a menu closes or a drag ends. */
+    _afterInteraction() {
+        if (!this._dock)
+            return;
+        if (this._pendingFull || this._pendingItems)
+            this._queueUpdate(false);
+        this._onHoverChanged();
+    }
+
+    // --- build / teardown ---------------------------------------------------
 
     _destroyDock() {
         this._clearHideTimeout();
@@ -86,17 +201,26 @@ export default class AquaDockExtension extends Extension {
             DND.removeDragMonitor(this._dragMonitor);
             this._dragMonitor = null;
         }
-        if (this._menu) {
-            this._menu.destroy();
-            this._menu = null;
+        this._dragging = false;
+
+        // Null the dock first so signal handlers fired during teardown
+        // (menus closing, hover changing) become no-ops.
+        const dock = this._dock;
+        this._dock = null;
+        this._box = null;
+        this._openMenus.clear();
+
+        if (this._dockMenu) {
+            this._dockMenu.destroy();
+            this._dockMenu = null;
         }
         this._menuManager = null;
         this._itemApps.clear();
         this._favoriteIds.clear();
-        if (this._dock) {
-            Main.layoutManager.removeChrome(this._dock);
-            this._dock.destroy();
-            this._dock = null;
+
+        if (dock) {
+            Main.layoutManager.removeChrome(dock);
+            dock.destroy(); // also destroys each item's menu
         }
         if (this._edge) {
             Main.layoutManager.removeChrome(this._edge);
@@ -110,29 +234,37 @@ export default class AquaDockExtension extends Extension {
         }
     }
 
-    _buildDock() {
+    /**
+     * @param {boolean} preserveReveal - keep an auto-hiding dock on screen
+     *   if it was showing (or the pointer is over it) before the rebuild.
+     */
+    _buildDock(preserveReveal) {
+        const wasRevealed = preserveReveal && this._dock !== null && !this._hidden;
         this._destroyDock();
 
-        const s = this._settings;
-        const position = s.get_string('position');
-        const autohide = s.get_boolean('autohide');
-        const vertical = position !== 'bottom';
+        const autohide = this._settings.get_boolean('autohide');
+        const horizontal = Layout.isHorizontal(this.position);
 
-        this._dock = new St.BoxLayout({
+        this._dock = new St.Bin({
             style_class: 'aqua-dock',
-            vertical,
             reactive: true,
             track_hover: true,
         });
+        this._box = new St.BoxLayout({
+            vertical: !horizontal,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._dock.set_child(this._box);
+        this._hidden = false;
         this._applyStyle();
 
         this._dock.connect('notify::hover', () => this._onHoverChanged());
         this._dock.connect('notify::width', () => this._updatePosition());
         this._dock.connect('notify::height', () => this._updatePosition());
-        this._dock.connect('button-press-event', (a, event) => this._onButtonPress(event));
+        this._dock.connect('button-press-event', (_a, event) => this._onDockButtonPress(event));
 
-        this._buildMenu();
-        this._populate();
+        this._menuManager = new PopupMenu.PopupMenuManager(this._dock);
 
         Main.layoutManager.addChrome(this._dock, {
             affectsStruts: !autohide,
@@ -151,119 +283,118 @@ export default class AquaDockExtension extends Extension {
             affectsInputRegion: false,
         });
 
-        if (autohide)
-            this._setupAutohide();
-
+        this._refreshItems();
         this._updatePosition();
+
+        if (autohide)
+            this._setupAutohide(wasRevealed || this._pointerOverDock());
     }
 
-    // --- context menu -------------------------------------------------------
+    // --- menus --------------------------------------------------------------
 
-    _buildMenu() {
-        const position = this._settings.get_string('position');
-        const side = position === 'left' ? St.Side.LEFT
-            : position === 'right' ? St.Side.RIGHT
-                : St.Side.BOTTOM;
-
-        this._menu = new PopupMenu.PopupMenu(this._dock, 0.5, side);
-        this._menu.actor.add_style_class_name('aqua-dock-menu');
-        Main.uiGroup.add_child(this._menu.actor);
-        this._menu.close();
-
-        this._menuManager = new PopupMenu.PopupMenuManager(this._dock);
-        this._menuManager.addMenu(this._menu);
-
-        // Re-run the auto-hide check once the menu closes.
-        this._menu.connect('open-state-changed', (menu, open) => {
-            if (!open && this._dock)
-                this._onHoverChanged();
-        });
-
-        this._populateMenu();
-    }
-
-    _onButtonPress(event) {
-        if (event.get_button() === 3) { // right-click
-            let source = event.get_source();
-            while (source && source !== this._dock) {
-                if (this._itemApps.has(source))
-                    return Clutter.EVENT_PROPAGATE;
-                source = source.get_parent();
+    _trackMenu(menu) {
+        Main.uiGroup.add_child(menu.actor);
+        this._menuManager.addMenu(menu);
+        menu.connect('open-state-changed', (m, open) => {
+            if (!this._dock)
+                return;
+            if (open) {
+                this._openMenus.add(m);
+                this._clearHideTimeout();
+                this._hideTooltip();
+                this._reveal();
+            } else {
+                this._openMenus.delete(m);
+                this._afterInteraction();
             }
-            this._populateMenu();
-            this._toggleMenu();
-            return Clutter.EVENT_STOP;
-        }
-        return Clutter.EVENT_PROPAGATE;
-    }
-
-    _populateMenu(app = null) {
-        this._menu.removeAll();
-
-        if (app) {
-            const favorites = AppFavorites.getAppFavorites();
-            const isFavorite = favorites.getFavorites().some(favorite =>
-                favorite.get_id() === app.get_id());
-
-            const newWindowItem = new PopupMenu.PopupMenuItem('New Window');
-            newWindowItem.connect('activate', () => {
-                try {
-                    app.open_new_window(-1);
-                } catch (e) {
-                    logError(e, 'Aqua Dock: failed to open new window');
-                }
-            });
-            this._menu.addMenuItem(newWindowItem);
-
-            const appInfo = app.get_app_info();
-            if (appInfo) {
-                for (const action of appInfo.list_actions()) {
-                    const label = appInfo.get_action_name(action) || '';
-                    if (!/private|incognito/i.test(`${action} ${label}`))
-                        continue;
-
-                    const privateWindowItem = new PopupMenu.PopupMenuItem(label || 'Open Private Window');
-                    privateWindowItem.connect('activate', () => {
-                        // Shell.App.launch_action needs (name, timestamp, workspace);
-                        // omitting the workspace throws and nothing launches.
-                        try {
-                            app.launch_action(action, global.get_current_time(), -1);
-                        } catch (e) {
-                            logError(e, `Aqua Dock: failed to launch action "${action}"`);
-                        }
-                    });
-                    this._menu.addMenuItem(privateWindowItem);
-                }
-            }
-
-            this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            const favoriteItem = new PopupMenu.PopupMenuItem(
-                isFavorite ? 'Remove from Dock' : 'Pin to Dock');
-            favoriteItem.connect('activate', () => {
-                if (isFavorite)
-                    favorites.removeFavorite(app.get_id());
-                else
-                    favorites.addFavorite(app.get_id());
-            });
-            this._menu.addMenuItem(favoriteItem);
-            this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        }
-
-        const settingsItem = new PopupMenu.PopupMenuItem('Aqua Dock Settings…');
-        settingsItem.connect('activate', () => this.openPreferences());
-        this._menu.addMenuItem(settingsItem);
-
-        const hideItem = new PopupMenu.PopupSwitchMenuItem('Auto-hide',
-            this._settings.get_boolean('autohide'));
-        hideItem.connect('toggled', (item, state) => {
-            this._settings.set_boolean('autohide', state);
         });
-        this._menu.addMenuItem(hideItem);
     }
 
-    _toggleMenu() {
-        if (this._menu)
-            this._menu.toggle();
+    _onDockButtonPress(event) {
+        // Clicks on app items are handled (and stopped) by the items, so
+        // anything reaching here landed on the dock's empty area.
+        if (event.get_button() !== Clutter.BUTTON_SECONDARY)
+            return Clutter.EVENT_PROPAGATE;
+
+        const [x, y] = event.get_coords();
+        this._openDockMenu(x, y);
+        return Clutter.EVENT_STOP;
+    }
+
+    _openDockMenu(x, y) {
+        if (!this._dockMenu) {
+            // Anchor at the click point via the shell's dummy cursor, so the
+            // menu appears where the user clicked rather than mid-dock.
+            this._dockMenu = new PopupMenu.PopupMenu(
+                Main.layoutManager.dummyCursor, 0.5, menuSide(this.position));
+            this._dockMenu.actor.add_style_class_name('aqua-dock-menu');
+            this._trackMenu(this._dockMenu);
+        }
+        Main.layoutManager.setDummyCursorGeometry(x, y, 0, 0);
+        this._dockMenu.removeAll();
+        this.fillDockOptions(this._dockMenu, true);
+        this._dockMenu.open(BoxPointer.PopupAnimation.FULL);
+    }
+
+    _openAppMenu(item, app) {
+        if (!item._menu) {
+            item._menu = new DockAppMenu(item, this);
+            item._menu.setApp(app);
+            this._trackMenu(item._menu);
+        }
+        item._menu.prepare();
+        item._menu.open(BoxPointer.PopupAnimation.FULL);
+    }
+
+    /**
+     * Dock-wide options, shared by the empty-area menu and the "Dock"
+     * submenu of each app menu.
+     *
+     * @param {PopupMenu.PopupMenuBase} menu - menu or submenu to fill
+     * @param {boolean} nested - group choices in submenus (only allowed at
+     *   the top level; otherwise they are listed under headings)
+     */
+    fillDockOptions(menu, nested) {
+        const s = this._settings;
+
+        const addSwitch = (label, key) => {
+            const item = new PopupMenu.PopupSwitchMenuItem(label, s.get_boolean(key));
+            item.connect('toggled', (_i, state) => s.set_boolean(key, state));
+            menu.addMenuItem(item);
+        };
+        addSwitch('Auto-hide', 'autohide');
+        addSwitch('Magnification', 'hover-zoom');
+
+        const group = title => {
+            if (nested) {
+                const sub = new PopupMenu.PopupSubMenuMenuItem(title);
+                menu.addMenuItem(sub);
+                return sub.menu;
+            }
+            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem(title));
+            return menu;
+        };
+        const addChoice = (target, label, selected, onActivate) => {
+            const item = new PopupMenu.PopupMenuItem(label);
+            item.setOrnament(selected ? PopupMenu.Ornament.DOT : UNSELECTED);
+            if (onActivate)
+                item.connect('activate', onActivate);
+            else
+                item.setSensitive(false);
+            target.addMenuItem(item);
+        };
+
+        const positions = group('Position on Screen');
+        const current = this.position;
+        for (const pos of Layout.POSITIONS) {
+            addChoice(positions, POSITION_LABELS[pos], pos === current,
+                () => s.set_string('position', pos));
+        }
+
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        const prefs = new PopupMenu.PopupMenuItem('Dock Settings…');
+        prefs.connect('activate', () => this.openPreferences());
+        menu.addMenuItem(prefs);
     }
 
     // --- content ------------------------------------------------------------
@@ -273,16 +404,10 @@ export default class AquaDockExtension extends Extension {
         const apps = [];
         const seen = new Set();
 
-        const favorites = AppFavorites.getAppFavorites().getFavorites();
-        this._favoriteIds = new Set(favorites.filter(app => app).map(app => app.get_id()));
+        const favorites = AppFavorites.getAppFavorites().getFavorites().filter(app => app);
+        this._favoriteIds = new Set(favorites.map(app => app.get_id()));
 
-        for (const app of favorites) {
-            if (app && !seen.has(app.get_id())) {
-                seen.add(app.get_id());
-                apps.push(app);
-            }
-        }
-        for (const app of Shell.AppSystem.get_default().get_running()) {
+        for (const app of [...favorites, ...Shell.AppSystem.get_default().get_running()]) {
             if (app && !seen.has(app.get_id())) {
                 seen.add(app.get_id());
                 apps.push(app);
@@ -291,28 +416,37 @@ export default class AquaDockExtension extends Extension {
         return apps;
     }
 
-    _populate() {
+    _refreshItems() {
+        if (!this._box)
+            return;
+        this._hideTooltip();
+        this._box.destroy_all_children();
+        this._itemApps.clear();
+
         const s = this._settings;
-        const iconSize = s.get_int('icon-size');
-        const spacing = s.get_int('item-spacing');
-        const showIndicators = s.get_boolean('show-running-indicators');
-        const hoverZoom = s.get_boolean('hover-zoom');
-        const position = s.get_string('position');
+        const opts = {
+            iconSize: s.get_int('icon-size'),
+            showIndicators: s.get_boolean('show-running-indicators'),
+            hoverZoom: s.get_boolean('hover-zoom'),
+        };
+        const half = s.get_int('item-spacing') / 2;
+        const margin = Layout.isHorizontal(this.position) ? `0 ${half}px` : `${half}px 0`;
 
         for (const app of this._population()) {
-            const item = this._createItem(app, iconSize, showIndicators, hoverZoom, position);
-            item.set_style(`margin: ${position === 'bottom' ? `0 ${spacing / 2}px` : `${spacing / 2}px 0`};`);
-            this._dock.add_child(item);
+            const item = this._createItem(app, opts);
+            item.set_style(`margin: ${margin};`);
+            this._box.add_child(item);
             this._itemApps.set(item, app);
         }
     }
 
-    _createItem(app, iconSize, showIndicators, hoverZoom, position) {
+    _createItem(app, {iconSize, showIndicators, hoverZoom}) {
         const item = new St.Button({
             style_class: 'aqua-dock-item',
             can_focus: true,
             reactive: true,
             track_hover: true,
+            button_mask: St.ButtonMask.ONE | St.ButtonMask.TWO,
         });
 
         const box = new St.BoxLayout({
@@ -334,6 +468,7 @@ export default class AquaDockExtension extends Extension {
         item.set_child(box);
 
         // Zoom up from the edge the dock sits on.
+        const position = this.position;
         if (position === 'bottom')
             item.set_pivot_point(0.5, 1.0);
         else if (position === 'left')
@@ -342,7 +477,7 @@ export default class AquaDockExtension extends Extension {
             item.set_pivot_point(1.0, 0.5);
 
         item.connect('notify::hover', () => {
-            const hovered = item.hover;
+            const hovered = item.hover && !this._dragging;
             if (hoverZoom) {
                 item.ease({
                     scale_x: hovered ? ZOOM_SCALE : 1.0,
@@ -351,108 +486,112 @@ export default class AquaDockExtension extends Extension {
                     mode: Clutter.AnimationMode.EASE_OUT_QUAD,
                 });
             }
-            if (hovered)
+            if (hovered && this._openMenus.size === 0)
                 this._showTooltip(item, app.get_name());
             else
                 this._hideTooltip();
         });
 
-        item.connect('button-press-event', (a, event) => {
-            item._pressedButton = event.get_button();
-            if (item._pressedButton === 3) {
-                this._populateMenu(app);
-                this._menu.open();
-                return Clutter.EVENT_STOP;
-            }
-            return Clutter.EVENT_PROPAGATE;
+        item.connect('button-press-event', (_a, event) => {
+            if (event.get_button() !== Clutter.BUTTON_SECONDARY)
+                return Clutter.EVENT_PROPAGATE;
+            this._openAppMenu(item, app);
+            return Clutter.EVENT_STOP;
         });
+        // Menu key / Shift+F10 on a focused icon.
+        item.connect('popup-menu', () => this._openAppMenu(item, app));
 
-        item.connect('clicked', () => {
-            if (item._pressedButton !== undefined && item._pressedButton !== null &&
-                item._pressedButton !== 1) {
-                item._pressedButton = null;
+        item.connect('clicked', (_button, clickedButton) => {
+            if (item._suppressClick)
                 return;
-            }
-            item._pressedButton = null;
-            if (item._dragMoved) {
-                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                    item._dragMoved = false;
-                    return GLib.SOURCE_REMOVE;
-                });
-                return;
-            }
             this._hideTooltip();
-            this._activate(app);
+            if (clickedButton === Clutter.BUTTON_MIDDLE && app.can_open_new_window())
+                app.open_new_window(-1);
+            else
+                this._activate(app);
         });
 
-        item.connect('destroy', () => this._hideTooltip());
+        item.connect('destroy', () => {
+            item._menu?.destroy();
+            item._menu = null;
+            this._hideTooltip();
+        });
 
-        if (this._favoriteIds.has(app.get_id())) {
-            const draggable = DND.makeDraggable(item);
-            draggable.connect('drag-begin', () => {
-                item._dragMoved = false;
-                this._dragMonitor = {
-                    dragMotion: event => {
-                        this._onItemDragMotion(item, event.x, event.y);
-                        return DND.DragMotionResult.CONTINUE;
-                    },
-                };
-                DND.addDragMonitor(this._dragMonitor);
-            });
-            draggable.connect('drag-end', () => {
-                if (this._dragMonitor) {
-                    DND.removeDragMonitor(this._dragMonitor);
-                    this._dragMonitor = null;
-                }
-                this._onItemDragEnd(item);
-            });
-        }
+        if (this._favoriteIds.has(app.get_id()))
+            this._makeReorderable(item, icon, app, iconSize);
 
         return item;
     }
 
-    _onItemDragMotion(item, pointerX, pointerY) {
-        if (!this._dock || !this._favoriteIds.has(this._itemApps.get(item)?.get_id()))
-            return;
+    /**
+     * Drag a pinned icon along the dock to reorder it. A copy of the icon
+     * follows the pointer while the real item slides between its
+     * neighbours, so the item never leaves the dock.
+     */
+    _makeReorderable(item, icon, app, iconSize) {
+        item._delegate = {
+            getDragActor: () => app.create_icon_texture(iconSize),
+            getDragActorSource: () => icon,
+        };
 
-        const horizontal = this._settings.get_string('position') === 'bottom';
-        const pointer = horizontal ? pointerX : pointerY;
-        const favoriteItems = this._dock.get_children().filter(child =>
-            this._favoriteIds.has(this._itemApps.get(child)?.get_id()));
-        const targetIndex = favoriteItems
-            .filter(child => child !== item)
-            .filter(child => {
-                const [x, y] = child.get_transformed_position();
-                const [width, height] = child.get_transformed_size();
-                const center = horizontal ? x + width / 2 : y + height / 2;
-                return center < pointer;
-            }).length;
-        const currentIndex = favoriteItems.indexOf(item);
-        const newIndex = targetIndex;
+        const draggable = DND.makeDraggable(item);
+        let startIndex = -1;
 
-        if (newIndex === currentIndex)
-            return;
+        draggable.connect('drag-begin', () => {
+            this._dragging = true;
+            item._suppressClick = true;
+            startIndex = this._box.get_children().indexOf(item);
+            item.opacity = DRAG_PLACEHOLDER_OPACITY;
+            this._hideTooltip();
+            this._dragMonitor = {
+                dragMotion: event => {
+                    this._onItemDragMotion(item, event.x, event.y);
+                    return DND.DragMotionResult.CONTINUE;
+                },
+            };
+            DND.addDragMonitor(this._dragMonitor);
+        });
 
-        this._dock.remove_child(item);
-        this._dock.insert_child_at_index(item, newIndex);
-        item._dragMoved = true;
+        draggable.connect('drag-end', () => {
+            if (this._dragMonitor) {
+                DND.removeDragMonitor(this._dragMonitor);
+                this._dragMonitor = null;
+            }
+            this._dragging = false;
+            item.opacity = 255;
+
+            // The release that ends a drag must not also launch the app.
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                item._suppressClick = false;
+                return GLib.SOURCE_REMOVE;
+            });
+
+            const index = this._box?.get_children().indexOf(item) ?? -1;
+            if (index >= 0 && index !== startIndex)
+                AppFavorites.getAppFavorites().moveFavoriteToPos(app.get_id(), index);
+
+            this._afterInteraction();
+        });
     }
 
-    _onItemDragEnd(item) {
-        if (!item._dragMoved)
+    _onItemDragMotion(item, pointerX, pointerY) {
+        if (!this._box || item.get_parent() !== this._box)
             return;
 
-        const app = this._itemApps.get(item);
-        const index = this._dock.get_children()
-            .filter(child => this._favoriteIds.has(this._itemApps.get(child)?.get_id()))
-            .indexOf(item);
-        if (app && index >= 0)
-            AppFavorites.getAppFavorites().moveFavoriteToPos(app.get_id(), index);
-
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            item._dragMoved = false;
-            return GLib.SOURCE_REMOVE;
+        // Pinned apps come first in the box, so their child index is also
+        // their index in the favourites list.
+        const horizontal = Layout.isHorizontal(this.position);
+        const pinned = this._box.get_children().filter(child =>
+            this._favoriteIds.has(this._itemApps.get(child)?.get_id()));
+        const centres = pinned.filter(child => child !== item).map(child => {
+            const [x, y] = child.get_transformed_position();
+            const [width, height] = child.get_transformed_size();
+            return horizontal ? x + width / 2 : y + height / 2;
         });
+        const target = Layout.dropIndex(centres, horizontal ? pointerX : pointerY);
+
+        if (target !== pinned.indexOf(item))
+            this._box.set_child_at_index(item, target);
     }
 
     _activate(app) {
@@ -485,13 +624,12 @@ export default class AquaDockExtension extends Extension {
         const ih = item.height;
         const tw = this._tooltip.width;
         const th = this._tooltip.height;
-        const position = this._settings.get_string('position');
 
         let x, y;
-        if (position === 'bottom') {
+        if (this.position === 'bottom') {
             x = ix + (iw - tw) / 2;
             y = iy - th - 8;
-        } else if (position === 'left') {
+        } else if (this.position === 'left') {
             x = ix + iw + 8;
             y = iy + (ih - th) / 2;
         } else {
@@ -508,7 +646,7 @@ export default class AquaDockExtension extends Extension {
         this._tooltip.ease({
             opacity: 0,
             duration: 100,
-            onComplete: () => this._tooltip && this._tooltip.hide(),
+            onComplete: () => this._tooltip?.hide(),
         });
     }
 
@@ -524,6 +662,11 @@ export default class AquaDockExtension extends Extension {
         const dark = s.get_boolean('dark-background');
         const rgb = dark ? '30, 30, 32' : '245, 245, 247';
         const border = dark ? '255, 255, 255' : '0, 0, 0';
+
+        if (dark)
+            this._dock.remove_style_class_name('aqua-dock-light');
+        else
+            this._dock.add_style_class_name('aqua-dock-light');
 
         this._dock.set_style(
             `background-color: rgba(${rgb}, ${alpha});` +
@@ -541,79 +684,66 @@ export default class AquaDockExtension extends Extension {
         if (!monitor)
             return;
 
-        const s = this._settings;
-        const position = s.get_string('position');
-        const margin = s.get_int('edge-margin');
-        const w = this._dock.width;
-        const h = this._dock.height;
-
-        let x, y;
-        if (position === 'bottom') {
-            x = monitor.x + Math.round((monitor.width - w) / 2);
-            y = monitor.y + monitor.height - h - margin;
-        } else if (position === 'left') {
-            x = monitor.x + margin;
-            y = monitor.y + Math.round((monitor.height - h) / 2);
-        } else { // right
-            x = monitor.x + monitor.width - w - margin;
-            y = monitor.y + Math.round((monitor.height - h) / 2);
-        }
-        this._dock.set_position(x, y);
+        const rect = Layout.dockRect({
+            position: this.position,
+            margin: this._settings.get_int('edge-margin'),
+            monitor,
+            width: this._dock.width,
+            height: this._dock.height,
+        });
+        this._dock.set_position(rect.x, rect.y);
 
         // Keep a hidden dock parked off-screen after any size change.
         if (this._hidden)
             this._applyHiddenOffset();
     }
 
+    /** True when the pointer is inside the dock's on-screen (revealed) area. */
+    _pointerOverDock() {
+        if (!this._dock)
+            return false;
+        const [px, py] = global.get_pointer();
+        return Layout.containsPoint({
+            x: this._dock.x,
+            y: this._dock.y,
+            width: this._dock.width,
+            height: this._dock.height,
+        }, px, py);
+    }
+
     // --- auto-hide ----------------------------------------------------------
 
-    _setupAutohide() {
+    _setupAutohide(startRevealed) {
         const monitor = Main.layoutManager.primaryMonitor;
-        const position = this._settings.get_string('position');
-
-        // A thin reactive strip along the screen edge that reveals the dock.
-        let ex, ey, ew, eh;
-        const thickness = 3;
-        if (position === 'bottom') {
-            ex = monitor.x; ey = monitor.y + monitor.height - thickness;
-            ew = monitor.width; eh = thickness;
-        } else if (position === 'left') {
-            ex = monitor.x; ey = monitor.y;
-            ew = thickness; eh = monitor.height;
-        } else {
-            ex = monitor.x + monitor.width - thickness; ey = monitor.y;
-            ew = thickness; eh = monitor.height;
-        }
+        const strip = Layout.edgeStrip(this.position, monitor, EDGE_THICKNESS);
 
         this._edge = new St.Widget({reactive: true, track_hover: true});
-        this._edge.set_position(ex, ey);
-        this._edge.set_size(ew, eh);
+        this._edge.set_position(strip.x, strip.y);
+        this._edge.set_size(strip.width, strip.height);
         this._edge.connect('notify::hover', () => {
-            if (this._edge.hover)
+            if (this._edge?.hover)
                 this._reveal();
         });
         Main.layoutManager.addChrome(this._edge, {
             affectsStruts: false,
             affectsInputRegion: true,
+            trackFullscreen: true,
         });
 
-        // Start hidden.
-        this._hidden = true;
-        this._applyHiddenOffset();
-    }
-
-    _hiddenOffset() {
-        const position = this._settings.get_string('position');
-        const margin = this._settings.get_int('edge-margin');
-        if (position === 'bottom')
-            return {x: 0, y: this._dock.height + margin + 12};
-        if (position === 'left')
-            return {x: -(this._dock.width + margin + 12), y: 0};
-        return {x: this._dock.width + margin + 12, y: 0}; // right
+        if (startRevealed) {
+            // Rebuilt while in use: stay put, then hide normally once the
+            // pointer leaves.
+            this._hidden = false;
+            this._onHoverChanged();
+        } else {
+            this._hidden = true;
+            this._applyHiddenOffset();
+        }
     }
 
     _applyHiddenOffset() {
-        const off = this._hiddenOffset();
+        const off = Layout.hiddenOffset(this.position, this._dock.width,
+            this._dock.height, this._settings.get_int('edge-margin'));
         this._dock.translation_x = off.x;
         this._dock.translation_y = off.y;
     }
@@ -635,7 +765,9 @@ export default class AquaDockExtension extends Extension {
         if (!this._dock || this._hidden)
             return;
         this._hidden = true;
-        const off = this._hiddenOffset();
+        this._hideTooltip();
+        const off = Layout.hiddenOffset(this.position, this._dock.width,
+            this._dock.height, this._settings.get_int('edge-margin'));
         this._dock.ease({
             translation_x: off.x,
             translation_y: off.y,
@@ -644,23 +776,30 @@ export default class AquaDockExtension extends Extension {
         });
     }
 
+    /** Anything that must keep an auto-hiding dock on screen. */
+    _inUse() {
+        return this._openMenus.size > 0 ||
+            this._dragging ||
+            this._dock.hover ||
+            Boolean(this._edge?.hover) ||
+            this._pointerOverDock();
+    }
+
     _onHoverChanged() {
-        if (!this._settings.get_boolean('autohide'))
+        if (!this._dock || !this._settings.get_boolean('autohide'))
             return;
-        if (this._dock.hover) {
+
+        this._clearHideTimeout();
+        if (this._inUse()) {
             this._reveal();
-        } else {
-            this._clearHideTimeout();
-            this._hideTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HIDE_DELAY, () => {
-                this._hideTimeout = 0;
-                // Don't slide the dock away while its context menu is open.
-                if (this._menu && this._menu.isOpen)
-                    return GLib.SOURCE_REMOVE;
-                if (this._dock && !this._dock.hover && !(this._edge && this._edge.hover))
-                    this._hide();
-                return GLib.SOURCE_REMOVE;
-            });
+            return;
         }
+        this._hideTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HIDE_DELAY, () => {
+            this._hideTimeout = 0;
+            if (this._dock && !this._inUse())
+                this._hide();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _clearHideTimeout() {
