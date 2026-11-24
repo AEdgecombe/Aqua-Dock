@@ -1,0 +1,17 @@
+{
+  "name": "aqua-dock",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling for the Aqua Dock GNOME Shell extension (not shipped).",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "node --test",
+    "check:schema": "glib-compile-schemas --strict --dry-run schemas/",
+    "check": "npm run lint && npm run check:schema && npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "globals": "16.5.0"
+  }
+}

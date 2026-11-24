@@ -12,3 +12,6 @@ schemas/gschemas.compiled
 # Local screenshots / scratch images (committed art lives in assets/)
 pictures/
 *pictures/
+
+# Dev tooling
+node_modules/

@@ -163,7 +163,7 @@ export default class AquaDockExtension extends Extension {
         const position = this._settings.get_string('position');
         const side = position === 'left' ? St.Side.LEFT
             : position === 'right' ? St.Side.RIGHT
-            : St.Side.BOTTOM;
+                : St.Side.BOTTOM;
 
         this._menu = new PopupMenu.PopupMenu(this._dock, 0.5, side);
         this._menu.actor.add_style_class_name('aqua-dock-menu');
