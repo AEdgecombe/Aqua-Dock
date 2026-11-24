@@ -5,6 +5,8 @@ import Gio from 'gi://Gio';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+import {PRESETS, applyPreset, findMatchingPreset} from './lib/presets.js';
+
 // Sample icons used only to populate the live preview.
 const PREVIEW_ICONS = [
     'web-browser',
@@ -37,6 +39,16 @@ export default class AquaDockPreferences extends ExtensionPreferences {
                 Gdk.Display.get_default(), this._css);
         });
 
+        // --- Presets --------------------------------------------------------
+        const presetPage = new Adw.PreferencesPage({
+            title: 'Presets',
+            icon_name: 'starred-symbolic',
+        });
+        window.add(presetPage);
+
+        presetPage.add(this._makePreview(settings));
+        presetPage.add(this._makePresetGroup(settings));
+
         // --- Layout ---------------------------------------------------------
         const layoutPage = new Adw.PreferencesPage({
             title: 'Layout',
@@ -62,6 +74,8 @@ export default class AquaDockPreferences extends ExtensionPreferences {
         placement.add(positionRow);
 
         placement.add(this._spin(settings, 'edge-margin', 'Edge margin', 'Gap from the screen edge (px)', 0, 80));
+        placement.add(this._switch(settings, 'panel-mode', 'Panel mode',
+            'Stretch the dock along the whole edge, like a taskbar'));
 
         const behaviour = new Adw.PreferencesGroup({title: 'Behaviour'});
         layoutPage.add(behaviour);
@@ -98,6 +112,48 @@ export default class AquaDockPreferences extends ExtensionPreferences {
         this._refreshAll();
     }
 
+    // --- presets ------------------------------------------------------------
+
+    _makePresetGroup(settings) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Style presets',
+            description: 'Apply a ready-made look, then fine-tune it on the other pages',
+        });
+
+        const rows = PRESETS.map(preset => {
+            const row = new Adw.ActionRow({
+                title: preset.name,
+                subtitle: preset.description,
+                activatable: true,
+            });
+            const check = new Gtk.Image({
+                icon_name: 'object-select-symbolic',
+                tooltip_text: 'Current style',
+            });
+            row.add_suffix(check);
+            // A dedicated Gio.Settings: applyPreset() leaves it in delay mode.
+            row.connect('activated', () => applyPreset(this.getSettings(), preset.id));
+            group.add(row);
+            return {preset, check};
+        });
+
+        const custom = new Adw.ActionRow({
+            title: 'Custom',
+            subtitle: 'Your own settings, not matching any preset',
+            sensitive: false,
+        });
+        custom.add_suffix(new Gtk.Image({icon_name: 'object-select-symbolic'}));
+        group.add(custom);
+
+        this._refreshers.push(() => {
+            const active = findMatchingPreset(settings);
+            for (const {preset, check} of rows)
+                check.visible = preset === active;
+            custom.visible = active === null;
+        });
+        return group;
+    }
+
     // --- live preview -------------------------------------------------------
 
     _makePreview(settings) {
@@ -107,6 +163,7 @@ export default class AquaDockPreferences extends ExtensionPreferences {
         const stage = new Gtk.Box({
             css_classes: ['aqua-preview-stage'],
             hexpand: true,
+            vexpand: true,
         });
 
         // Keep the stage a sensible size even when icons get large.
@@ -123,6 +180,15 @@ export default class AquaDockPreferences extends ExtensionPreferences {
         });
         stage.append(dock);
 
+        // Icons sit in their own row so panel mode can centre them.
+        const row = new Gtk.Box({
+            halign: Gtk.Align.CENTER,
+            valign: Gtk.Align.CENTER,
+            hexpand: true,
+            vexpand: true,
+        });
+        dock.append(row);
+
         const items = [];
         for (const name of PREVIEW_ICONS) {
             const item = new Gtk.Box({
@@ -135,7 +201,7 @@ export default class AquaDockPreferences extends ExtensionPreferences {
 
             item.append(image);
             item.append(dot);
-            dock.append(item);
+            row.append(item);
 
             // Interactive hover zoom, mirroring the real dock.
             const motion = new Gtk.EventControllerMotion();
@@ -155,32 +221,37 @@ export default class AquaDockPreferences extends ExtensionPreferences {
         wrap.append(scroller);
         group.add(wrap);
 
-        this._refreshers.push(() => this._refreshPreview(settings, stage, dock, items));
+        this._refreshers.push(() => this._refreshPreview(settings, dock, row, items));
         return group;
     }
 
-    _refreshPreview(settings, stage, dock, items) {
+    _refreshPreview(settings, dock, row, items) {
         const position = settings.get_string('position');
+        const panelMode = settings.get_boolean('panel-mode');
         const iconSize = settings.get_int('icon-size');
         const spacing = settings.get_int('item-spacing');
         const showDots = settings.get_boolean('show-running-indicators');
 
         const vertical = position !== 'bottom';
-        dock.orientation = vertical
+        row.orientation = vertical
             ? Gtk.Orientation.VERTICAL
             : Gtk.Orientation.HORIZONTAL;
-        dock.spacing = spacing;
+        row.spacing = spacing;
 
-        // Anchor the dock inside the stage the way it sits on screen.
+        // Anchor the dock inside the stage the way it sits on screen; in
+        // panel mode it stretches along its edge.
+        const along = panelMode ? Gtk.Align.FILL : Gtk.Align.CENTER;
+        dock.hexpand = panelMode && !vertical;
+        dock.vexpand = panelMode && vertical;
         if (position === 'bottom') {
-            dock.halign = Gtk.Align.CENTER;
+            dock.halign = along;
             dock.valign = Gtk.Align.END;
         } else if (position === 'left') {
             dock.halign = Gtk.Align.START;
-            dock.valign = Gtk.Align.CENTER;
+            dock.valign = along;
         } else {
             dock.halign = Gtk.Align.END;
-            dock.valign = Gtk.Align.CENTER;
+            dock.valign = along;
         }
 
         // Only the first three icons are "running" in the mock.
@@ -200,6 +271,8 @@ export default class AquaDockPreferences extends ExtensionPreferences {
         const rgb = dark ? '30, 30, 32' : '245, 245, 247';
         const border = dark ? '255, 255, 255' : '0, 0, 0';
         const dotColour = dark ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.7)';
+        const borderAlpha = Math.min(0.12, alpha * 0.2).toFixed(3);
+        const shadowAlpha = (0.45 * alpha).toFixed(3);
 
         this._css.load_from_data(`
             .aqua-preview-stage {
@@ -209,10 +282,10 @@ export default class AquaDockPreferences extends ExtensionPreferences {
             }
             .aqua-preview-dock {
                 background-color: rgba(${rgb}, ${alpha});
-                border: 1px solid rgba(${border}, 0.12);
+                border: 1px solid rgba(${border}, ${borderAlpha});
                 border-radius: ${radius}px;
                 padding: ${padding}px;
-                box-shadow: 0 6px 24px 2px rgba(0, 0, 0, 0.45);
+                box-shadow: 0 6px 24px 2px rgba(0, 0, 0, ${shadowAlpha});
             }
             .aqua-preview-dot {
                 background-color: ${dotColour};
