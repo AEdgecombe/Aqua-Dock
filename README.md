@@ -18,14 +18,20 @@ spacing, corner radius and screen position.
  
 ## Features
 
-- **Floating panel** anchored to the bottom, left or right edge 
+- **Floating panel** anchored to the bottom, left or right edge, or
+  **panel mode** that stretches along the whole edge like a taskbar
+- **Style presets** — one click to look like macOS (light or dark),
+  Windows 11, Ubuntu, ChromeOS, a minimal icons-only dock, or the Aqua default
 - **Fixed or auto-hide** — auto-hide slides the dock away and reveals it when
   the pointer touches the screen edge
 - **macOS touches** — hover magnification, running-app indicator dots, tooltips
 - **Pinned + running apps** — shows your GNOME favourites plus anything running
-- **App actions** — right-click an icon to pin or remove it from the dock, open
-  a new window, or launch a private/incognito window when the app provides that action
-- **Reorderable favorites** — drag pinned icons along the dock to change their order
+- **Full right-click menus** — the same app menu GNOME uses: open windows,
+  New Window, every action the app provides (e.g. private/incognito window),
+  Pin/Unpin, Move Left/Right, App Details and Quit, plus the dock options
+- **Reorderable favorites** — drag pinned icons along the dock, or use
+  Move Left/Right from the menu
+- **Middle-click** an icon to open a new window
 - **Live customisation** via the preferences window, with a **built-in live
   preview** so you can see every change as you make it:
   - Icon size, icon spacing, inner padding
@@ -54,11 +60,14 @@ On an Xorg session you can instead reload the shell with `Alt+F2` → `r` → `E
 
 ## Configure
 
-The quickest way: **right-click an empty area of the dock** and choose
-**Aqua Dock Settings…**. That menu also has a quick **Auto-hide** toggle.
-Right-click an app icon for app-specific actions, including pinning and any
-private/incognito window action provided by that app. Drag pinned icons to
-reorder them.
+The quickest way: **right-click an empty area of the dock**. That menu has
+toggles for **Auto-hide**, **Magnification** and **Panel Mode**, a
+**Position on Screen** submenu, a **Style** submenu with the presets, and
+**Dock Settings…**.
+
+Right-click an app icon for its own menu (windows, actions, Pin/Unpin,
+Move Left/Right, Quit); the same dock options are in its **Dock** submenu.
+Menus never make an auto-hiding dock slide away while they are open.
 
 You can also open the preferences from the **Extensions** app (click the gear
 icon next to Aqua Dock), or from a terminal:
@@ -67,8 +76,9 @@ icon next to Aqua Dock), or from a terminal:
 gnome-extensions prefs aqua-dock@aedgecombe.github.io
 ```
 
-The settings window shows a **live preview** of the dock, and every change
-applies to the real dock immediately — no reload needed.
+The settings window opens on a **Presets** page and shows a **live preview**
+of the dock; every change applies to the real dock immediately — no reload
+needed. Picking a preset and then tweaking a value turns it into *Custom*.
 
 ## Uninstall
 
@@ -82,7 +92,11 @@ rm -rf ~/.local/share/gnome-shell/extensions/aqua-dock@aedgecombe.github.io
 - `extension.js` — the dock: builds the panel, handles placement, auto-hide,
   hover zoom, tooltips and app activation.
 - `prefs.js` — libadwaita preferences window bound to GSettings.
+- `lib/layout.js`, `lib/presets.js` — pure logic (placement maths, presets)
+  shared by both, with no GNOME imports so it can be unit tested.
 - `schemas/` — the GSettings schema (compiled by `install.sh`).
+- Checks (Node 18+): `npm ci` once, then `npm run check` runs ESLint, a
+  strict schema compile and the unit tests in `tests/`.
 - Watch the shell logs while iterating:
   ```bash
   journalctl -f -o cat /usr/bin/gnome-shell

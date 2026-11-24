@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, test and build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies (lockfile)
+        run: npm ci
+
+      - name: Lint and format check
+        run: npm run lint
+
+      # Plain GJS, so there is no separate type checker; a strict schema
+      # compile catches type/default/range mistakes in the settings.
+      - name: Validate settings schema
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libglib2.0-bin
+          npm run check:schema
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build extension zip
+        run: |
+          files="metadata.json extension.js prefs.js stylesheet.css schemas"
+          [ -d lib ] && files="$files lib"
+          zip -r aqua-dock@aedgecombe.github.io.zip $files
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aqua-dock-extension
+          path: aqua-dock@aedgecombe.github.io.zip
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

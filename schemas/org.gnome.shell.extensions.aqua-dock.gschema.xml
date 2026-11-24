@@ -62,6 +62,12 @@
       <description>Screen edge the dock is anchored to.</description>
     </key>
 
+    <key name="panel-mode" type="b">
+      <default>false</default>
+      <summary>Panel mode</summary>
+      <description>Stretch the dock along the whole screen edge, like a taskbar, with the icons centred.</description>
+    </key>
+
     <key name="dark-background" type="b">
       <default>true</default>
       <summary>Dark background</summary>
